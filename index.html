@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>IP//SCAN — Public IP Check</title>
+<style>
+:root{--bg:#020805;--panel:#04100a;--line:#0f3d24;--fg:#7dffb0;--dim:#3f9565;--hot:#00ff7f;--bad:#ff4d5e;--warn:#ffd25e;color-scheme:dark}
+*{box-sizing:border-box}
+html,body{margin:0;min-height:100%;background:var(--bg);color:var(--fg);font:15px/1.5 ui-monospace,"JetBrains Mono","Fira Code",Menlo,Consolas,monospace}
+#rain{position:fixed;inset:0;width:100%;height:100%;opacity:.16;z-index:0}
+body::after{content:"";position:fixed;inset:0;pointer-events:none;z-index:3;background:repeating-linear-gradient(0deg,rgba(0,0,0,.22) 0 1px,transparent 1px 3px)}
+main{position:relative;z-index:2;max-width:860px;margin:0 auto;padding:32px 18px 60px}
+h1{margin:0 0 4px;font-size:clamp(26px,6vw,44px);letter-spacing:.04em;color:var(--hot);text-shadow:0 0 14px rgba(0,255,127,.55)}
+.sub{color:var(--dim);margin:0 0 22px}
+.boot{min-height:96px;margin:0 0 22px;padding:12px 14px;border:1px dashed var(--line);background:rgba(2,8,5,.8);color:var(--dim);white-space:pre-wrap;font-size:13px}
+.boot b{color:var(--fg);font-weight:400}
+.card{background:var(--panel);border:1px solid var(--line);margin-bottom:22px;box-shadow:0 0 0 1px rgba(0,255,127,.04),0 0 28px rgba(0,255,127,.06)}
+.head{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:14px 16px;border-bottom:1px solid var(--line)}
+.head h2{margin:0;font-size:18px;font-weight:700}
+.badge{font-weight:700;white-space:nowrap}
+.ok{color:var(--hot);text-shadow:0 0 10px rgba(0,255,127,.6)}
+.no{color:var(--bad)}
+.wait{color:var(--warn)}
+.row{display:grid;grid-template-columns:170px 1fr;gap:10px;padding:11px 16px;border-bottom:1px solid var(--line)}
+.row:last-child{border-bottom:0}
+.k{color:var(--dim)}
+.v{word-break:break-all}
+.ip{font-size:20px;color:var(--hot);cursor:pointer}
+.ip:hover{text-decoration:underline}
+.msg{padding:14px 16px;color:var(--dim)}
+.more{display:block;width:100%;background:none;border:0;border-top:1px solid var(--line);color:var(--dim);font:inherit;padding:11px;cursor:pointer}
+.more:hover,.btn:hover{color:var(--hot)}
+.btn{background:none;border:1px solid var(--line);color:var(--fg);font:inherit;padding:8px 14px;cursor:pointer}
+.extra{display:none}.extra.open{display:block}
+.bar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:22px}
+.toast{color:var(--dim);font-size:13px}
+.cur::after{content:"█";animation:b 1s steps(1) infinite}@keyframes b{50%{opacity:0}}
+:focus-visible{outline:2px solid var(--hot);outline-offset:2px}
+@media(max-width:560px){.row{grid-template-columns:1fr;gap:0}}
+@media(prefers-reduced-motion:reduce){.cur::after{animation:none}}
+</style>
+</head>
+<body>
+<canvas id="rain" aria-hidden="true"></canvas>
+<main>
+  <h1>IP//SCAN</h1>
+  <p class="sub">Public address check for this connection.</p>
+  <pre class="boot" id="boot" aria-live="polite"></pre>
+
+  <div class="bar">
+    <button class="btn" id="rescan">Rescan</button>
+    <button class="btn" id="copyall">Copy report</button>
+    <span class="toast" id="toast"></span>
+  </div>
+
+  <section class="card" id="v4">
+    <div class="head"><h2>IPv4 connectivity</h2><span class="badge wait" id="v4s">Scanning…</span></div>
+    <div id="v4b"></div>
+  </section>
+
+  <section class="card" id="v6">
+    <div class="head"><h2>IPv6 connectivity</h2><span class="badge wait" id="v6s">Scanning…</span></div>
+    <div id="v6b"></div>
+  </section>
+</main>
+
+<script>
+(function(){
+  var $=function(id){return document.getElementById(id)};
+  var report={};
+
+  /* ---------- matrix rain ---------- */
+  var cv=$('rain'),cx=cv.getContext('2d'),cols=[],fs=16;
+  function size(){cv.width=innerWidth;cv.height=innerHeight;cols=new Array(Math.ceil(cv.width/fs)).fill(0).map(function(){return Math.random()*cv.height/fs})}
+  size();addEventListener('resize',size);
+  if(!matchMedia('(prefers-reduced-motion:reduce)').matches){
+    setInterval(function(){
+      cx.fillStyle='rgba(2,8,5,.12)';cx.fillRect(0,0,cv.width,cv.height);
+      cx.fillStyle='#00ff7f';cx.font=fs+'px monospace';
+      cols.forEach(function(y,i){
+        cx.fillText(String.fromCharCode(0x30A0+Math.random()*96),i*fs,y*fs);
+        cols[i]=(y*fs>cv.height&&Math.random()>.975)?0:y+1;
+      });
+    },60);
+  }
+
+  /* ---------- helpers ---------- */
+  function esc(s){return String(s==null?'—':s).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]})}
+  function row(k,v,cls){return '<div class="row"><div class="k">'+k+'</div><div class="v'+(cls?' '+cls:'')+'">'+v+'</div></div>'}
+  function timeout(ms){var c=new AbortController();setTimeout(function(){c.abort()},ms);return c.signal}
+  function getJSON(u){return fetch(u,{signal:timeout(8000),cache:'no-store'}).then(function(r){if(!r.ok)throw 0;return r.json()})}
+  var bootLines=[];
+  function log(t){bootLines.push(t);$('boot').innerHTML=bootLines.map(function(l){return '<b>&gt;</b> '+esc(l)}).join('\n')+'<span class="cur"></span>'}
+  function toast(t){$('toast').textContent=t;setTimeout(function(){$('toast').textContent=''},2200)}
+
+  /* ---------- render ---------- */
+  function render(ver,ip,d){
+    var s=$(ver+'s'),b=$(ver+'b');
+    if(!ip){
+      s.className='badge no';s.textContent='✗ Not Supported';
+      b.innerHTML='<div class="msg">Your connection does not appear to have '+(ver==='v4'?'IPv4':'IPv6')+' connectivity.</div>';
+      report[ver]=null;return;
+    }
+    s.className='badge ok';s.textContent='✓ Supported';
+    d=d||{};var c=d.connection||{},f=d.flag||{},tz=d.timezone||{};
+    var asn=c.asn?'AS'+c.asn:null;
+    var loc=[d.city,d.country].filter(Boolean).join(', ');
+    var html=
+      row('Address','<span class="ip" data-copy="'+esc(ip)+'" title="Click to copy">'+esc(ip)+'</span>')+
+      row('ISP',esc(c.isp))+
+      row('ASN',esc(asn))+
+      row('ASN Organization',esc(c.org))+
+      row('Location',(f.emoji?esc(f.emoji)+' ':'')+esc(loc||'Unknown'))+
+      '<div class="extra" id="'+ver+'x">'+
+        row('Region',esc(d.region))+
+        row('Postal code',esc(d.postal))+
+        row('Coordinates',d.latitude!=null?esc(d.latitude+', '+d.longitude):'—')+
+        row('Timezone',esc(tz.id)+(tz.utc?' ('+esc(tz.utc)+')':''))+
+        row('Domain',esc(c.domain))+
+        row('Type',esc(d.type))+
+      '</div>'+
+      '<button class="more" data-more="'+ver+'">More info ▾</button>';
+    b.innerHTML=html;
+    report[ver]={ip:ip,isp:c.isp,asn:asn,org:c.org,location:loc};
+  }
+
+  /* ---------- scan ---------- */
+  function lookup(ip){return getJSON('https://ipwho.is/'+encodeURIComponent(ip)).then(function(d){return d&&d.success===false?null:d}).catch(function(){return null})}
+
+  function scan(){
+    bootLines=[];report={};
+    ['v4','v6'].forEach(function(v){$(v+'s').className='badge wait';$(v+'s').textContent='Scanning…';$(v+'b').innerHTML=''});
+    log('initializing probe…');
+    var p4=getJSON('https://api4.ipify.org?format=json').then(function(r){return r.ip}).catch(function(){return null})
+      .then(function(ip){
+        log(ip?'IPv4 acquired: '+ip:'IPv4 probe: no response');
+        return ip?lookup(ip).then(function(d){log('IPv4 whois resolved');render('v4',ip,d)}):render('v4',null);
+      });
+    var p6=getJSON('https://api6.ipify.org?format=json').then(function(r){return r.ip}).catch(function(){return null})
+      .then(function(ip){
+        log(ip?'IPv6 acquired: '+ip:'IPv6 probe: no route');
+        return ip?lookup(ip).then(function(d){log('IPv6 whois resolved');render('v6',ip,d)}):render('v6',null);
+      });
+    Promise.all([p4,p6]).then(function(){log('scan complete.')});
+  }
+
+  /* ---------- events ---------- */
+  document.addEventListener('click',function(e){
+    var t=e.target;
+    if(t.dataset.copy){navigator.clipboard&&navigator.clipboard.writeText(t.dataset.copy).then(function(){toast('Copied '+t.dataset.copy)})}
+    if(t.dataset.more){var x=$(t.dataset.more+'x');var o=x.classList.toggle('open');t.textContent=o?'Less info ▴':'More info ▾'}
+  });
+  $('rescan').onclick=scan;
+  $('copyall').onclick=function(){
+    var l=['IPv4: '+(report.v4?report.v4.ip+' | '+report.v4.isp+' | '+report.v4.asn+' | '+report.v4.org+' | '+report.v4.location:'not supported'),
+           'IPv6: '+(report.v6?report.v6.ip+' | '+report.v6.isp+' | '+report.v6.asn+' | '+report.v6.org+' | '+report.v6.location:'not supported')];
+    navigator.clipboard&&navigator.clipboard.writeText(l.join('\n')).then(function(){toast('Report copied')});
+  };
+  scan();
+})();
+</script>
+</body>
+</html>
